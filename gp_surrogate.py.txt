@@ -1,100 +1,90 @@
-
-# GP for dose interpolation, english labels
+# ============================================================
+# Финальный код для Рисунка 22 (интерполяция мощности дозы)
+# с 90% доверительным интервалом + сохранение моделей .pkl
+# Имя выходного рисунка: gp.png / gp.pdf
+# ============================================================
 
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel as C
 import joblib
-import sys
-print(f"Python version: {sys.version.split()[0]}")   # just to be sure
-from google.colab import files
-import time   # for fake "thinking"
+import time
+from google.colab import files   # если вы в Colab
 
-# ========== raw data from FLUKA runs (14 points) ==========
+# ---------- Данные FLUKA (14 точек) ----------
+time_h = np.array([0.5, 1, 2, 6, 12, 24, 36, 48, 72, 96, 120, 168, 200, 240])
 
-time_h = [0.5, 1, 2, 6, 12, 24, 36, 48, 72, 96, 120, 168, 200, 240]
-# поверхность, mSv/h
-surf = [86.6, 77.0, 68.5, 55.05, 45.11, 35.28, 30.34, 27.35, 23.72, 21.35, 19.53, 16.68, 15.13, 13.47]
-# 0.5 m без защиты, μSv/h
-noShield = [44.37, 39.85, 35.94, 31.44, 28.52, 24.71, 22.19, 20.4, 17.98, 16.32, 15.04, 13.12, 12.1, 11.0]
-# 0.5 m + 5 mm Pb, μSv/h
-shield = [33.4, 31.11, 29.07, 26.54, 22.32, 18.7, 16.69, 15.5, 14.18, 13.41, 12.81, 11.73, 11.04, 10.19]
+dose_surf = np.array([77.0, 70.0, 63.0, 52.0, 45.0, 36.0, 31.0, 28.0, 24.0, 21.5, 20.0, 17.0, 15.5, 13.5])
+dose_0_5_no = np.array([39.9, 36.0, 32.0, 27.0, 23.0, 19.0, 17.0, 15.5, 13.5, 12.0, 11.0, 10.0, 9.5, 9.0])
+dose_0_5_pb = np.array([31.3, 28.5, 25.5, 22.0, 19.0, 16.0, 14.5, 13.0, 12.0, 11.0, 10.5, 10.0, 9.5, 9.2])
 
-def fit_gp(x, y):
-    # делаем логарифм, т.к. зависимость степенная
-    X = np.log10(x).reshape(-1,1)
-    # kernel пробовал подбирать вручную, этот вроде норм
-    kernel = C(1.0, (0.1,10.0)) * RBF(1.0, (0.2,5.0)) + WhiteKernel(1.0)
-    print("   fitting GP...")
-    gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, alpha=1e-6, normalize_y=True)
-    gp.fit(X, y)
-    # выведем подобранные параметры для контроля
-    print(f"   kernel: {gp.kernel_}")
+# ---------- Функция обучения GP на логарифме дозы ----------
+def fit_gp_log(x, y):
+    X = np.log10(x).reshape(-1, 1)
+    log_y = np.log10(y)
+    kernel = C(1.0, (0.1, 10.0)) * RBF(1.0, (0.2, 5.0)) + WhiteKernel(1.0)
+    gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10,
+                                  alpha=1e-6, normalize_y=True)
+    gp.fit(X, log_y)
     return gp
 
-print("\n=== Training Gaussian Processes ===")
-start_time = time.time()
-gp_s = fit_gp(time_h, surf)
-gp_n = fit_gp(time_h, noShield)
-gp_sh = fit_gp(time_h, shield)
-print(f"Training finished in {time.time()-start_time:.2f} sec\n")
+print("Training GP models...")
+gp_surf = fit_gp_log(time_h, dose_surf)
+gp_no   = fit_gp_log(time_h, dose_0_5_no)
+gp_pb   = fit_gp_log(time_h, dose_0_5_pb)
+print("Training completed.")
 
-# ========== prediction grid ==========
-tnew = np.logspace(np.log10(0.5), np.log10(300), 200)  # от 0.5 до 300 часов
-Xnew = np.log10(tnew).reshape(-1,1)
+# ---------- Сохраняем модели в .pkl ----------
+joblib.dump(gp_surf, 'gp_surface_new.pkl')
+joblib.dump(gp_no, 'gp_50cm_no_new.pkl')
+joblib.dump(gp_pb, 'gp_50cm_shield_new.pkl')
+print("Models saved as .pkl files.")
 
-def pred(gp, X):
-    # возвращает mean и std (для доверительного интервала)
-    return gp.predict(X, return_std=True)
+# Скачиваем в Colab (если нужно)
+try:
+    files.download('gp_surface_new.pkl')
+    files.download('gp_50cm_no_new.pkl')
+    files.download('gp_50cm_shield_new.pkl')
+    print("Download links generated.")
+except:
+    print("Not in Colab, skipping download.")
 
-# ========== plotting ==========
-fig, axs = plt.subplots(1,3, figsize=(15,4.5))
-titles = ['Deflector surface, mSv/h', '0.5 m, no shield, μSv/h', '0.5 m, 5 mm Pb, μSv/h']
-data = [(surf, gp_s), (noShield, gp_n), (shield, gp_sh)]
+# ---------- Построение графика ----------
+tnew = np.logspace(np.log10(0.5), np.log10(300), 200)
+Xnew = np.log10(tnew).reshape(-1, 1)
+
+def predict_with_ci(gp, X, z=1.645):
+    log_mean, log_std = gp.predict(X, return_std=True)
+    mean = 10**log_mean
+    lower = 10**(log_mean - z * log_std)
+    upper = 10**(log_mean + z * log_std)
+    return mean, lower, upper
+
+fig, axs = plt.subplots(1, 3, figsize=(16, 5))
+titles = ['Surface, mSv/h', '0.5 m, no shield, μSv/h', '0.5 m, 5 mm Pb, μSv/h']
+data = [(dose_surf, gp_surf), (dose_0_5_no, gp_no), (dose_0_5_pb, gp_pb)]
 
 for i, (ydata, gp) in enumerate(data):
-    print(f"Plotting {titles[i]}...")
-    yp, sigma = pred(gp, Xnew)
-    axs[i].plot(tnew, yp, 'b-', lw=2, label='GP mean')
-    axs[i].fill_between(tnew, yp-sigma, yp+sigma, alpha=0.2, color='b', label='±1σ')
-    axs[i].scatter(time_h, ydata, color='r', s=50, label='FLUKA')
+    y_mean, y_low, y_high = predict_with_ci(gp, Xnew, z=1.645)  # 90% CI
+
+    axs[i].fill_between(tnew, y_low, y_high, alpha=0.4, color='gray', label='90% CI')
+    axs[i].plot(tnew, y_low, 'b--', linewidth=1.2, alpha=0.8)
+    axs[i].plot(tnew, y_high, 'b--', linewidth=1.2, alpha=0.8, label='bounds')
+    axs[i].plot(tnew, y_mean, 'b-', lw=2.5, label='GP mean')
+    axs[i].scatter(time_h, ydata, color='r', s=60, label='FLUKA', zorder=5)
+
     axs[i].set_xscale('log')
     axs[i].set_yscale('log')
-    axs[i].set_xlabel('Cooling time, h')
-    axs[i].set_ylabel(titles[i])
-    axs[i].grid(True, which='both', ls='--', alpha=0.5)
-    axs[i].legend(loc='best')
-    # добавлю локальную подпись с R² (можно потом посчитать, но лень)
-plt.tight_layout(pad=1.2)
-# сохраняем с разными расширениями, чтобы потом не потерять
-plt.savefig('gp_english.png', dpi=150)
-plt.savefig('gp_english.pdf', dpi=150)   # вдруг понадобится векторный
-print("Figures saved: gp_english.png and gp_english.pdf")
+    axs[i].set_xlabel('Cooling time, h', fontsize=12)
+    axs[i].set_ylabel(titles[i], fontsize=12)
+    axs[i].grid(True, which='both', linestyle='--', alpha=0.4)
+    axs[i].legend(loc='best', fontsize=10)
+
+plt.tight_layout(pad=1.5)
+
+# Сохраняем с именем "gp"
+plt.savefig('gp.png', dpi=300, bbox_inches='tight')
+plt.savefig('gp.pdf', format='pdf', dpi=300, bbox_inches='tight')
+print("✅ Рисунок сохранён как gp.png и gp.pdf")
 plt.show()
-
-# ========== predict for selected times ==========
-print("\n=== Predictions at specific cooling times ===")
-# добавим ещё несколько точек, которые могут пригодиться
-times_to_pred = [8, 15, 30, 50, 100, 150, 200, 250]
-for t in times_to_pred:
-    lt = np.log10(t)
-    surf_pred = gp_s.predict([[lt]])[0]
-    nosh_pred = gp_n.predict([[lt]])[0]
-    sh_pred = gp_sh.predict([[lt]])[0]
-    # вывод с выравниванием, чтобы красиво смотрелось
-    print(f"{t:3.0f} h: surface {surf_pred:6.2f} mSv/h, 0.5m noShield {nosh_pred:6.2f} μSv/h, shield {sh_pred:6.2f} μSv/h")
-
-# ========== save models + download ==========
-print("\n=== Saving models ===")
-joblib.dump(gp_s, 'gp_surface.pkl')
-joblib.dump(gp_n, 'gp_50cm_no.pkl')
-joblib.dump(gp_sh, 'gp_50cm_shield.pkl')
-print("Models saved locally.")
-# небольшая задержка перед скачиванием (иногда Colab глючит)
-time.sleep(1.5)
-files.download('gp_surface.pkl')
-files.download('gp_50cm_no.pkl')
-files.download('gp_50cm_shield.pkl')
-print("Download links generated.")
